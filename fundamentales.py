@@ -8,16 +8,16 @@ import os
 app = Flask(__name__)
 CORS(app)
 
-# Lista de agentes para mantener el "Stealth Mode" y evitar bloqueos
+# Rotación de identidades para mitigar el bloqueo de IP en Render
 USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 ]
 
 @app.route('/')
 def home():
-    return "🚀 Aetherium Fundamental API v4.0 [INTEGRATED] - ONLINE"
+    return "🚀 Aetherium Financial Engine v4.0 [INTEGRATED] - ONLINE"
 
 @app.route('/api/fundamentales', methods=['GET'])
 def analizar_eeff():
@@ -26,16 +26,16 @@ def analizar_eeff():
         return jsonify({"error": "Falta el Ticker"}), 400
 
     try:
-        # 1. Sigilo total para evitar el "Too Many Requests"
-        time.sleep(random.uniform(1.5, 3))
+        # 1. Sigilo total (Pausa aleatoria ligeramente más larga para evitar el 429)
+        time.sleep(random.uniform(2, 4))
         empresa = yf.Ticker(ticker_symbol)
         
-        # 2. Descarga de datos
+        # 2. Descarga de datos (Mantenemos tu lógica de fallback)
         is_statement = empresa.get_financials()
         bs_statement = empresa.get_balance_sheet()
         info = empresa.info
 
-        # --- AUDITOR OMNICANAL PARA DATOS CRUDOS ---
+        # --- AUDITOR OMNICANAL (Tu lógica original) ---
         def buscar_dato(df, keywords):
             if df is None or df.empty: return None
             for word in keywords:
@@ -46,14 +46,12 @@ def analizar_eeff():
                         return float(val)
             return None
 
-        # Extracción de EBIT (Dato base para NOPAT)
+        # Extracción de EBIT
         ebit = buscar_dato(is_statement, ['EBIT', 'Operating Income', 'OperatingIncome'])
-        if ebit is None: ebit = float(info.get('ebitda', 0)) * 0.8 # Fallback
+        if ebit is None: ebit = float(info.get('ebitda', 0)) * 0.8 
 
         # Extracción de Patrimonio
-        patrimonio = buscar_dato(bs_statement, [
-            'Total Stockholder Equity', 'Stockholders Equity', 'Common Stock Equity', 'Total Equity', 'Net Assets'
-        ])
+        patrimonio = buscar_dato(bs_statement, ['Total Stockholder Equity', 'Stockholders Equity', 'Common Stock Equity', 'Total Equity', 'Net Assets'])
         if patrimonio is None or patrimonio == 0:
             book_v = info.get('bookValue')
             shares = info.get('sharesOutstanding')
@@ -64,34 +62,30 @@ def analizar_eeff():
         if deuda is None or deuda == 0:
             deuda = float(info.get('totalDebt', 0))
 
-        # --- CÁLCULOS OPERATIVOS ---
-        patrimonio_final = patrimonio if patrimonio is not None else 0.0
-        ebit_final = ebit if ebit is not None else 0.0
-        deuda_final = deuda if deuda is not None else 0.0
-        
+        # --- CÁLCULOS ROIC ---
         tax_rate = 0.27
-        nopat = ebit_final * (1 - tax_rate)
-        capital_invertido = patrimonio_final + deuda_final
+        nopat = (ebit if ebit else 0) * (1 - tax_rate)
+        capital_invertido = (patrimonio if patrimonio else 0) + (deuda if deuda else 0)
         roic = (nopat / capital_invertido) * 100 if capital_invertido > 0 else 0
 
-        # --- RESPUESTA JSON EXTENDIDA (LO QUE PIDIÓ EL COLEGA) ---
+        # --- RESPUESTA JSON COMPLETA (Lo que pidió tu colega) ---
         return jsonify({
-            "status": "success",
             "ticker": ticker_symbol.upper(),
             "empresa": info.get("longName", ticker_symbol),
             "sector": info.get("sector", "N/A"),
-            "datos_crudos": {
-                "ebit": round(ebit_final, 2),
+            "datos_financieros": {
+                "ebit": round(ebit if ebit else 0, 2),
                 "nopat": round(nopat, 2),
-                "patrimonio": round(patrimonio_final, 2),
-                "deuda_total": round(deuda_final, 2),
-                "ventas_totales": info.get('totalRevenue'),
-                "utilidad_neta": info.get('netIncome')
+                "patrimonio": round(patrimonio if patrimonio else 0, 2),
+                "deuda_total": round(deuda if deuda else 0, 2),
+                "revenue": info.get('totalRevenue'),
+                "net_income": info.get('netIncome')
             },
             "ratios": {
                 "liquidez": {
                     "razon_corriente": info.get('currentRatio'),
-                    "prueba_acida": info.get('quickRatio')
+                    "prueba_acida": info.get('quickRatio'),
+                    "ratio_efectivo": info.get('cashRatio')
                 },
                 "rentabilidad": {
                     "roic": round(roic, 2),
@@ -100,14 +94,14 @@ def analizar_eeff():
                     "ros": round(info.get('profitMargins', 0) * 100, 2) if info.get('profitMargins') else None
                 },
                 "solvencia": {
-                    "leverage": round(deuda_final / patrimonio_final, 2) if patrimonio_final > 0 else "High/Neg",
+                    "leverage": round(deuda / patrimonio, 2) if patrimonio and patrimonio > 0 else "N/A",
                     "ebitda": info.get('ebitda')
                 },
                 "mercado": {
                     "beta": round(info.get('beta', 0), 2) if info.get('beta') else None
                 }
             },
-            "msg": "Aetherium Full-Stack JSON v4.0"
+            "msg": "Aetherium Full-Stack Intelligence Unit"
         })
 
     except Exception as e:
