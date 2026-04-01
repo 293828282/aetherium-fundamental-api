@@ -4,20 +4,18 @@ from flask_cors import CORS
 import random
 import time
 import os
-import requests
 
 app = Flask(__name__)
 CORS(app)
 
-# Session para simular un navegador real y evitar el "Too Many Requests"
-session = requests.Session()
-session.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
-})
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+]
 
 @app.route('/')
 def home():
-    return "🚀 Aetherium Fundamental API v3.4 [ANTI-BLOCK] - ONLINE"
+    return "🚀 Aetherium Fundamental API v4.0 [OFFICIAL FIX] - ONLINE"
 
 @app.route('/api/fundamentales', methods=['GET'])
 def analizar_eeff():
@@ -26,18 +24,16 @@ def analizar_eeff():
         return jsonify({"error": "Falta el Ticker"}), 400
 
     try:
-        # 1. Sigilo y delay aleatorio
-        time.sleep(random.uniform(2, 4))
+        # 1. Sigilo total (Sin sesión manual para evitar el error de curl_cffi)
+        time.sleep(random.uniform(1.5, 3))
+        empresa = yf.Ticker(ticker_symbol)
         
-        # 2. Pasamos la session al Ticker (esto es clave para el bloqueo)
-        empresa = yf.Ticker(ticker_symbol, session=session)
-        
-        # 3. Intentamos traer .info primero (es más ligero)
-        info = empresa.info
+        # 2. Descarga de datos
         is_statement = empresa.get_financials()
         bs_statement = empresa.get_balance_sheet()
+        info = empresa.info
 
-        # --- TU LÓGICA DE AUDITOR (BUSCAR DATO) ---
+        # --- AUDITOR OMNICANAL (Tu lógica original) ---
         def buscar_dato(df, keywords):
             if df is None or df.empty: return None
             for word in keywords:
@@ -48,56 +44,83 @@ def analizar_eeff():
                         return float(val)
             return None
 
-        # --- DATOS PARA EL ROIC ---
-        ebit = buscar_dato(is_statement, ['EBIT', 'Operating Income'])
-        if ebit is None: ebit = float(info.get('ebitda', 0)) * 0.8
+        # --- EXTRACCIÓN EBIT ---
+        ebit = buscar_dato(is_statement, ['EBIT', 'Operating Income', 'OperatingIncome'])
+        if ebit is None: ebit = float(info.get('operatingCashflow', 0))
 
-        patrimonio = buscar_dato(bs_statement, ['Total Stockholder Equity', 'Common Stock Equity', 'Total Equity'])
-        if patrimonio is None:
+        # --- EXTRACCIÓN PATRIMONIO ---
+        patrimonio = buscar_dato(bs_statement, ['Total Stockholder Equity', 'Stockholders Equity', 'Common Stock Equity', 'Total Equity', 'Net Assets'])
+        if patrimonio is None or patrimonio == 0:
             book_v = info.get('bookValue')
             shares = info.get('sharesOutstanding')
-            patrimonio = float(book_v * shares) if book_v and shares else float(info.get('totalStockholderEquity', 0))
+            if book_v and shares:
+                patrimonio = float(book_v * shares)
+        if patrimonio is None or patrimonio == 0:
+            patrimonio = float(info.get('totalStockholderEquity', 0))
 
-        deuda = buscar_dato(bs_statement, ['Total Debt', 'Long Term Debt'])
-        if deuda is None: deuda = float(info.get('totalDebt', 0))
+        # --- EXTRACCIÓN DEUDA ---
+        deuda = buscar_dato(bs_statement, ['Total Debt', 'Long Term Debt', 'Total Liab'])
+        if deuda is None or deuda == 0:
+            deuda = float(info.get('totalDebt', 0))
 
-        # --- CÁLCULOS DE INGENIERÍA COMERCIAL ---
+        # --- CÁLCULOS FINANCIEROS BASE ---
+        patrimonio_final = patrimonio if patrimonio is not None else 0.0
+        ebit_final = ebit if ebit is not None else 0.0
+        deuda_final = deuda if deuda is not None else 0.0
+        
         tax_rate = 0.27
-        nopat = (ebit if ebit else 0) * (1 - tax_rate)
-        cap_invertido = (patrimonio if patrimonio else 0) + (deuda if deuda else 0)
-        roic = (nopat / cap_invertido) * 100 if cap_invertido > 0 else 0
+        nopat = ebit_final * (1 - tax_rate)
+        capital_invertido = patrimonio_final + deuda_final
+        roic = (nopat / capital_invertido) * 100 if capital_invertido > 0 else 0
+        
+        # --- MAPEO DE NUEVAS VARIABLES (Lo que pidió el colega) ---
+        # Extraemos directamente de info para asegurar compatibilidad
+        ratios_extendidos = {
+            "liquidez": {
+                "corriente": info.get('currentRatio'),
+                "acida": info.get('quickRatio')
+            },
+            "rentabilidad_extra": {
+                "roe": round(info.get('returnOnEquity', 0) * 100, 2) if info.get('returnOnEquity') else None,
+                "roa": round(info.get('returnOnAssets', 0) * 100, 2) if info.get('returnOnAssets') else None,
+                "ros": round(info.get('profitMargins', 0) * 100, 2) if info.get('profitMargins') else None
+            },
+            "mercado": {
+                "beta": round(info.get('beta', 0), 2) if info.get('beta') else None,
+                "ebitda": info.get('ebitda'),
+                "ventas": info.get('totalRevenue'),
+                "utilidad_neta": info.get('netIncome')
+            }
+        }
 
-        # --- RESPUESTA JSON CON LAS VARIABLES DE TU COLEGA ---
+        # --- RESPUESTA FINAL ---
         return jsonify({
             "ticker": ticker_symbol.upper(),
             "empresa": info.get("longName", ticker_symbol),
             "sector": info.get("sector", "N/A"),
-            "analisis": {
-                "liquidez": {
-                    "razon_corriente": info.get('currentRatio'),
-                    "prueba_acida": info.get('quickRatio')
-                },
-                "rentabilidad": {
-                    "roe": round(info.get('returnOnEquity', 0) * 100, 2) if info.get('returnOnEquity') else None,
-                    "roa": round(info.get('returnOnAssets', 0) * 100, 2) if info.get('returnOnAssets') else None,
-                    "ros_margen_neto": round(info.get('profitMargins', 0) * 100, 2) if info.get('profitMargins') else None,
-                    "roic": round(roic, 2)
-                },
-                "solvencia": {
-                    "leverage": round(deuda / patrimonio, 2) if patrimonio and patrimonio > 0 else "N/A",
-                    "ebitda": info.get('ebitda')
-                },
-                "mercado": {
-                    "beta": round(info.get('beta', 0), 2) if info.get('beta') else None,
-                    "ventas": info.get('totalRevenue')
-                }
-            }
+            "datos_crudos": {
+                "ebit": round(ebit_final, 2),
+                "nopat": round(nopat, 2),
+                "patrimonio": round(patrimonio_final, 2),
+                "deuda_total": round(deuda_final, 2),
+                "ventas": ratios_extendidos["mercado"]["ventas"],
+                "utilidad_neta": ratios_extendidos["mercado"]["utilidad_neta"]
+            },
+            "ratios": {
+                "roic": round(roic, 2),
+                "leverage": round(deuda_final / patrimonio_final, 2) if patrimonio_final > 0 else "High/Neg",
+                "razon_corriente": ratios_extendidos["liquidez"]["corriente"],
+                "prueba_acida": ratios_extendidos["liquidez"]["acida"],
+                "roe": ratios_extendidos["rentabilidad_extra"]["roe"],
+                "roa": ratios_extendidos["rentabilidad_extra"]["roa"],
+                "ros": ratios_extendidos["rentabilidad_extra"]["ros"],
+                "beta": ratios_extendidos["mercado"]["beta"],
+                "ebitda": ratios_extendidos["mercado"]["ebitda"]
+            },
+            "msg": "Data v4.0 - Basada en motor v3.3 funcional"
         })
 
     except Exception as e:
-        # Si Yahoo nos sigue bloqueando, devolvemos un mensaje claro
-        if "429" in str(e) or "Too Many Requests" in str(e):
-            return jsonify({"error": "Yahoo Rate Limit", "detalle": "La IP de Render está bloqueada temporalmente. Espera 10 minutos."}), 500
         return jsonify({"error": "Fallo crítico", "detalle": str(e)}), 500
 
 if __name__ == '__main__':
