@@ -8,14 +8,16 @@ import os
 app = Flask(__name__)
 CORS(app)
 
+# Disfraces de navegación para evitar bloqueos de IP
 USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 ]
 
 @app.route('/')
 def home():
-    return "🚀 Aetherium Fundamental API v3.3 [REIT & GLOBAL FIX] - ONLINE"
+    return "🚀 Aetherium Financial Engine v4.0 [FULL-STACK] - ONLINE"
 
 @app.route('/api/fundamentales', methods=['GET'])
 def analizar_eeff():
@@ -24,87 +26,96 @@ def analizar_eeff():
         return jsonify({"error": "Falta el Ticker"}), 400
 
     try:
-        # 1. Sigilo total
+        # 1. Sigilo y simulación humana
         time.sleep(random.uniform(1, 2))
         empresa = yf.Ticker(ticker_symbol)
         
-        # 2. Descarga con fallback (reintento)
-        is_statement = empresa.get_financials()
-        bs_statement = empresa.get_balance_sheet()
+        # 2. Acceso a los diccionarios de datos
         info = empresa.info
+        # Traemos también los estados financieros crudos por si acaso
+        is_statement = empresa.financials 
 
-        # --- AUDITOR OMNICANAL ---
-        def buscar_dato(df, keywords):
-            if df is None or df.empty: return None
+        # --- EXTRACCIÓN DE RATIOS SOLICITADOS (Directo desde .info) ---
+        # Estos son los que te pidió tu colega para completar la tabla
+        ratios_info = {
+            "razon_corriente": info.get('currentRatio'),
+            "prueba_acida": info.get('quickRatio'),
+            "roe": info.get('returnOnEquity'),
+            "roa": info.get('returnOnAssets'),
+            "ros_margen_neto": info.get('profitMargins'),
+            "beta": info.get('beta'),
+            "ebitda": info.get('ebitda'),
+            "revenue_total": info.get('totalRevenue'),
+            "net_income": info.get('netIncome'),
+            "dividend_yield": info.get('dividendYield'),
+            "payout_ratio": info.get('payoutRatio')
+        }
+
+        # --- FALLBACK PARA DATOS CRUDOS (Auditoría) ---
+        def buscar_en_tabla(df, keywords):
+            if df is None or df.empty: return 0.0
             for word in keywords:
                 match = [idx for idx in df.index if word.lower() in idx.lower()]
                 if match:
                     val = df.loc[match[0]].iloc[0]
-                    if val is not None and str(val).lower() != 'nan' and val != 0:
-                        return float(val)
-            return None
+                    return float(val) if val and str(val) != 'nan' else 0.0
+            return 0.0
 
-        # --- EXTRACCIÓN EBIT ---
-        ebit = buscar_dato(is_statement, ['EBIT', 'Operating Income', 'OperatingIncome'])
-        if ebit is None: ebit = float(info.get('operatingCashflow', 0)) # Fallback si no hay EBIT
+        # EBIT y NOPAT (Para el ROIC que ya tenías funcionando)
+        ebit = buscar_en_tabla(is_statement, ['EBIT', 'Operating Income'])
+        if ebit == 0: ebit = float(info.get('ebitda', 0)) * 0.8 # Estimación si falla todo
 
-        # --- EXTRACCIÓN PATRIMONIO (LA BATALLA FINAL) ---
-        # Intento 1: Balance Sheet nombres estándar
-        patrimonio = buscar_dato(bs_statement, [
-            'Total Stockholder Equity', 
-            'Stockholders Equity', 
-            'Common Stock Equity', 
-            'Total Equity',
-            'Net Assets' # Común en REITs y Fondos
-        ])
-
-        # Intento 2: Atajo por Yahoo Info (Book Value * Shares)
-        if patrimonio is None or patrimonio == 0:
-            book_v = info.get('bookValue')
-            shares = info.get('sharesOutstanding')
-            if book_v and shares:
-                patrimonio = float(book_v * shares)
-
-        # Intento 3: Directamente del campo totalStockholderEquity de la info
-        if patrimonio is None or patrimonio == 0:
-            patrimonio = float(info.get('totalStockholderEquity', 0))
-
-        # --- EXTRACCIÓN DEUDA ---
-        deuda = buscar_dato(bs_statement, ['Total Debt', 'Long Term Debt', 'Total Liab'])
-        if deuda is None or deuda == 0:
-            deuda = float(info.get('totalDebt', 0))
-
-        # --- CÁLCULOS FINANCIEROS ---
-        # Si el patrimonio sigue siendo 0 tras 3 intentos, la empresa podría tener patrimonio negativo
-        patrimonio_final = patrimonio if patrimonio is not None else 0.0
-        ebit_final = ebit if ebit is not None else 0.0
-        deuda_final = deuda if deuda is not None else 0.0
-        
         tax_rate = 0.27
-        nopat = ebit_final * (1 - tax_rate)
-        capital_invertido = patrimonio_final + deuda_final
+        nopat = ebit * (1 - tax_rate)
         
-        roic = (nopat / capital_invertido) * 100 if capital_invertido > 0 else 0
+        # Patrimonio y Deuda (Cálculo de Leverage)
+        patrimonio = float(info.get('totalStockholderEquity') or (info.get('bookValue', 0) * info.get('sharesOutstanding', 0)))
+        deuda = float(info.get('totalDebt', 0))
         
+        capital_invertido = patrimonio + deuda
+        roic_calculado = (nopat / capital_invertido) * 100 if capital_invertido > 0 else 0
+
+        # 3. Respuesta JSON Maestra
         return jsonify({
+            "status": "success",
             "ticker": ticker_symbol.upper(),
             "empresa": info.get("longName", ticker_symbol),
             "sector": info.get("sector", "N/A"),
-            "datos_crudos": {
-                "ebit": round(ebit_final, 2),
-                "nopat": round(nopat, 2),
-                "patrimonio": round(patrimonio_final, 2),
-                "deuda_total": round(deuda_final, 2)
+            "industria": info.get("industry", "N/A"),
+            # Bloque de Ratios (Lo que pidió tu colega)
+            "ratios_principales": {
+                "liquidez": {
+                    "corriente": ratios_info["razon_corriente"],
+                    "acida": ratios_info["prueba_acida"]
+                },
+                "rentabilidad": {
+                    "roe_percent": round(ratios_info["roe"] * 100, 2) if ratios_info["roe"] else None,
+                    "roa_percent": round(ratios_info["roa"] * 100, 2) if ratios_info["roa"] else None,
+                    "ros_percent": round(ratios_info["ros_margen_neto"] * 100, 2) if ratios_info["ros_margen_neto"] else None,
+                    "roic_percent": round(roic_calculado, 2)
+                },
+                "solvencia": {
+                    "leverage": round(deuda / patrimonio, 2) if patrimonio > 0 else None,
+                    "deuda_capital": round(deuda / capital_invertido, 2) if capital_invertido > 0 else None
+                },
+                "mercado": {
+                    "beta": round(ratios_info["beta"], 2) if ratios_info["beta"] else None,
+                    "ebitda": ratios_info["ebitda"]
+                }
             },
-            "ratios": {
-                "roic": round(roic, 2),
-                "leverage": round(deuda_final / patrimonio_final, 2) if patrimonio_final > 0 else "High/Neg"
-            },
-            "msg": "Data auditada con fallback de seguridad v3.3"
+            # Datos crudos para respaldo
+            "datos_financieros": {
+                "ventas": ratios_info["revenue_total"],
+                "utilidad_neta": ratios_info["net_income"],
+                "ebit": ebit,
+                "nopat": nopat,
+                "patrimonio": patrimonio,
+                "deuda_total": deuda
+            }
         })
 
     except Exception as e:
-        return jsonify({"error": "Fallo crítico", "detalle": str(e)}), 500
+        return jsonify({"error": "Fallo en la extracción", "detalle": str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
