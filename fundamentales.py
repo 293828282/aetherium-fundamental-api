@@ -1,7 +1,6 @@
 import yfinance as yf
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import requests
 import random
 import time
 import os
@@ -10,22 +9,13 @@ import threading
 app = Flask(__name__)
 CORS(app)
 
-# 1. BLINDAJE DE SESIÓN: Nos disfrazamos de navegador Google Chrome
-session = requests.Session()
-session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
-    "Connection": "keep-alive"
-})
-
-# 2. EL TRUCO MÁGICO: El Candado (Lock)
-# Esto obliga al servidor a atender a los clientes de uno en uno.
+# EL TRUCO MÁGICO: El Candado (Lock) se mantiene para ordenar las peticiones
+# Esto obliga al servidor a atender a los clientes de uno en uno, evitando el error 429.
 api_lock = threading.Lock()
 
 @app.route('/')
 def home():
-    return "🚀 Aetherium Fundamental API v6.0 [THREAD-LOCKED ANTI-RATE-LIMIT] - ONLINE"
+    return "🚀 Aetherium Fundamental API v7.0 [YFINANCE NATIVE FIX] - ONLINE"
 
 @app.route('/api/datos', methods=['GET'])
 def analizar_eeff():
@@ -36,19 +26,21 @@ def analizar_eeff():
         return jsonify({"error": "Falta el Ticker"}), 400
 
     try:
-        # A partir de aquí, las peticiones simultáneas hacen fila
+        # Hacemos fila con el candado
         with api_lock:
             
             # Pausa obligatoria de 1.5 a 3 segundos ANTES de ir a Yahoo
             time.sleep(random.uniform(1.5, 3.0))
             
-            empresa = yf.Ticker(ticker_symbol, session=session)
+            # FIX CRÍTICO: Eliminamos el parametro 'session=session'
+            # Dejamos que yfinance use su propio sistema interno antibloqueo (curl_cffi)
+            empresa = yf.Ticker(ticker_symbol)
             
             yf_period = periodo
             if periodo not in ['1mo', '3mo', '6mo', '1y', '5y']: 
                 yf_period = '5y'
 
-            # 3. SISTEMA DE REINTENTOS: Si Yahoo falla, intentamos 3 veces más
+            # SISTEMA DE REINTENTOS
             hist = None
             for intento in range(3):
                 try:
@@ -68,7 +60,7 @@ def analizar_eeff():
 
             info = empresa.info
 
-            # Extracción segura
+            # Extracción segura de fundamentales
             ebit = info.get('operatingCashflow', 0)
             deuda = info.get('totalDebt', 0)
             
