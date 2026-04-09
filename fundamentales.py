@@ -9,13 +9,11 @@ import threading
 app = Flask(__name__)
 CORS(app)
 
-# EL TRUCO MÁGICO: El Candado (Lock) se mantiene para ordenar las peticiones
-# Esto obliga al servidor a atender a los clientes de uno en uno, evitando el error 429.
 api_lock = threading.Lock()
 
 @app.route('/')
 def home():
-    return "🚀 Aetherium Fundamental API v7.0 [YFINANCE NATIVE FIX] - ONLINE"
+    return "🚀 Aetherium Fundamental API v8.0 [ANTI-HTML-BLOCK FIX] - ONLINE"
 
 @app.route('/api/datos', methods=['GET'])
 def analizar_eeff():
@@ -26,29 +24,25 @@ def analizar_eeff():
         return jsonify({"error": "Falta el Ticker"}), 400
 
     try:
-        # Hacemos fila con el candado
         with api_lock:
+            time.sleep(random.uniform(1.0, 2.5))
             
-            # Pausa obligatoria de 1.5 a 3 segundos ANTES de ir a Yahoo
-            time.sleep(random.uniform(1.5, 3.0))
-            
-            # FIX CRÍTICO: Eliminamos el parametro 'session=session'
-            # Dejamos que yfinance use su propio sistema interno antibloqueo (curl_cffi)
             empresa = yf.Ticker(ticker_symbol)
             
             yf_period = periodo
             if periodo not in ['1mo', '3mo', '6mo', '1y', '5y']: 
                 yf_period = '5y'
 
-            # SISTEMA DE REINTENTOS
+            # 1. EXTRACCIÓN DE HISTORIAL BLINDADA
             hist = None
             for intento in range(3):
                 try:
                     hist = empresa.history(period=yf_period)
                     if not hist.empty:
-                        break # Si trajo datos, rompemos el ciclo y avanzamos
-                except:
-                    time.sleep(2) # Si falla, descansa 2 segundos y vuelve a intentar
+                        break
+                except Exception as e:
+                    print(f"Fallo historia {ticker_symbol} intento {intento}: {e}")
+                    time.sleep(2)
             
             datos_historicos = []
             if hist is not None and not hist.empty:
@@ -58,26 +52,31 @@ def analizar_eeff():
                         "Cierre": float(row['Close'])
                     })
 
-            info = empresa.info
+            # 2. EXTRACCIÓN DE INFO BLINDADA (Aquí ocurría el error "Expecting value")
+            info = {}
+            try:
+                info = empresa.info
+            except Exception as e:
+                print(f"Yahoo bloqueó la extracción de info para {ticker_symbol}: {e}")
+                # Si falla, info se queda como un diccionario vacío en lugar de romper el servidor
 
-            # Extracción segura de fundamentales
-            ebit = info.get('operatingCashflow', 0)
-            deuda = info.get('totalDebt', 0)
+            ebit = info.get('operatingCashflow', 0) if isinstance(info, dict) else 0
+            deuda = info.get('totalDebt', 0) if isinstance(info, dict) else 0
             
             patrimonio = 0
-            book_v = info.get('bookValue')
-            shares = info.get('sharesOutstanding')
-            if book_v is not None and shares is not None:
-                try:
-                    patrimonio = float(book_v) * float(shares)
-                except ValueError:
-                    patrimonio = float(info.get('totalStockholderEquity', 0))
+            if isinstance(info, dict):
+                book_v = info.get('bookValue')
+                shares = info.get('sharesOutstanding')
+                if book_v is not None and shares is not None:
+                    try:
+                        patrimonio = float(book_v) * float(shares)
+                    except ValueError:
+                        patrimonio = float(info.get('totalStockholderEquity', 0))
 
-        # --- AQUÍ SE ABRE EL CANDADO PARA LA SIGUIENTE PETICIÓN ---
-
+        # RESPUESTA LIMPIA SIEMPRE (Si viene vacío, el Frontend Aetherium activará su simulación)
         return jsonify({
             "ticker": ticker_symbol.upper(),
-            "empresa": info.get("longName", ticker_symbol),
+            "empresa": info.get("longName", ticker_symbol) if isinstance(info, dict) else ticker_symbol,
             "datos": datos_historicos,
             "fundamentales": {
                 "ebit": round(ebit if ebit else 0, 2),
@@ -87,6 +86,7 @@ def analizar_eeff():
         })
 
     except Exception as e:
+        # Solo llegará aquí si hay un error real de Python, no de red.
         return jsonify({"error": "Fallo critico en la API", "detalle": str(e)}), 500
 
 if __name__ == '__main__':
