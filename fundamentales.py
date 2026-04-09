@@ -14,7 +14,7 @@ api_lock = threading.Lock()
 
 @app.route('/')
 def home():
-    return "🚀 Aetherium Fundamental API v10 [FINANCIAL STATEMENTS ENGINE] - ONLINE"
+    return "🚀 Aetherium Fundamental API v11 [RAW DATA EXTRACTOR] - ONLINE"
 
 @app.route('/api/datos', methods=['GET'])
 def analizar_eeff():
@@ -26,10 +26,11 @@ def analizar_eeff():
 
     try:
         with api_lock:
+            # Pausa de seguridad humana
             time.sleep(random.uniform(1.0, 2.5))
             empresa = yf.Ticker(ticker_symbol)
             
-            # 1. EXTRACCIÓN DE HISTORIAL (Ya comprobamos que esto funciona perfecto)
+            # 1. HISTORIAL DE PRECIOS (Motor Estadístico)
             yf_period = periodo if periodo in ['1mo', '3mo', '6mo', '1y', '5y'] else '5y'
             hist = None
             for intento in range(3):
@@ -44,81 +45,68 @@ def analizar_eeff():
                 for index, row in hist.iterrows():
                     datos_historicos.append({"Fecha": index.strftime('%Y-%m-%d'), "Cierre": float(row['Close'])})
 
-            # 2. LA NUEVA VÍA: EXTRACCIÓN DE ESTADOS FINANCIEROS (Income Statement & Balance Sheet)
+            # 2. DESCARGA DE ESTADOS FINANCIEROS
             is_stmt = pd.DataFrame()
             bs_stmt = pd.DataFrame()
             try:
                 is_stmt = empresa.get_financials()
                 bs_stmt = empresa.get_balance_sheet()
-            except Exception as e:
-                print(f"Fallo al descargar EEFF para {ticker_symbol}: {e}")
+            except Exception:
+                pass
 
-            # Función para extraer el valor más reciente de una fila contable
-            def get_accounting_value(df, possible_keys):
+            # BÚSQUEDA INTELIGENTE (Fuzzy Match): Encuentra la fila aunque Yahoo le cambie el nombre
+            def find_val(df, keywords):
                 if df is None or df.empty: return 0
-                for key in possible_keys:
-                    if key in df.index:
-                        # Tomamos la columna 0 (el año más reciente reportado)
-                        val = df.loc[key].iloc[0]
-                        if pd.notna(val) and val != 0:
-                            return float(val)
+                for word in keywords:
+                    # Busca ignorando mayúsculas y espacios
+                    matches = [idx for idx in df.index if word.lower() in str(idx).lower()]
+                    if matches:
+                        # Si encuentra coincidencias, saca el valor del año más reciente (iloc[0])
+                        for match in matches:
+                            val = df.loc[match].iloc[0]
+                            if pd.notna(val) and str(val).lower() != 'nan' and val != 0:
+                                return float(val)
                 return 0
 
-            # 3. EXTRACCIÓN DE COMPONENTES CONTABLES BASE
-            net_income = get_accounting_value(is_stmt, ['Net Income', 'Net Income Common Stockholders'])
-            ebit = get_accounting_value(is_stmt, ['EBIT', 'Operating Income'])
-            total_revenue = get_accounting_value(is_stmt, ['Total Revenue', 'Operating Revenue'])
+            # 3. EXTRACCIÓN DE LAS CUENTAS CONTABLES CRUDAS
+            net_income = find_val(is_stmt, ['net income', 'net income common'])
+            ebit = find_val(is_stmt, ['ebit', 'operating income'])
+            revenue = find_val(is_stmt, ['total revenue', 'operating revenue'])
             
-            total_assets = get_accounting_value(bs_stmt, ['Total Assets'])
-            total_equity = get_accounting_value(bs_stmt, ['Stockholders Equity', 'Total Equity Gross Minority Interest', 'Total Stockholder Equity'])
-            total_debt = get_accounting_value(bs_stmt, ['Total Debt', 'Long Term Debt'])
-            current_assets = get_accounting_value(bs_stmt, ['Current Assets', 'Total Current Assets'])
-            current_liab = get_accounting_value(bs_stmt, ['Current Liabilities', 'Total Current Liabilities'])
+            assets = find_val(bs_stmt, ['total assets'])
+            equity = find_val(bs_stmt, ['stockholders equity', 'total equity', 'common stock equity'])
+            debt = find_val(bs_stmt, ['total debt', 'long term debt'])
 
-            # 4. CÁLCULO MANUAL DE RATIOS (Tu estrategia)
-            roe = round((net_income / total_equity) * 100, 2) if total_equity > 0 else None
-            roa = round((net_income / total_assets) * 100, 2) if total_assets > 0 else None
-            ros = round((net_income / total_revenue) * 100, 2) if total_revenue > 0 else None
-            
-            leverage = round((total_debt / total_equity), 2) if total_equity > 0 else None
-            current_ratio = round((current_assets / current_liab), 2) if current_liab > 0 else None
-            
-            tax_rate = 0.27 # Tasa impositiva asumida (Chile)
-            nopat = ebit * (1 - tax_rate)
-            invested_capital = total_debt + total_equity
-            roic = round((nopat / invested_capital) * 100, 2) if invested_capital > 0 else None
-
-            # Extraemos el nombre e intentamos rescatar el Beta del Info si nos dejan
+            # 4. CAPA DE RESPALDO (Por si Yahoo oculta los Estados Financieros)
             info = {}
             try:
                 info = empresa.info
             except Exception:
                 pass
 
-            beta = round(info.get('beta', 0), 2) if isinstance(info, dict) and info.get('beta') else None
+            if isinstance(info, dict):
+                if debt == 0: debt = float(info.get('totalDebt', 0))
+                if revenue == 0: revenue = float(info.get('totalRevenue', 0))
+                if net_income == 0: net_income = float(info.get('netIncome', 0))
+                if ebit == 0: ebit = float(info.get('operatingCashflow', 0))
+                if equity == 0:
+                    try:
+                        equity = float(info.get('bookValue', 0)) * float(info.get('sharesOutstanding', 0))
+                    except:
+                        equity = float(info.get('totalStockholderEquity', 0))
 
-        # RESPUESTA JSON CON RATIOS CALCULADOS
+        # RESPUESTA LIMPIA Y DIRECTA AL FRONTEND
         return jsonify({
             "ticker": ticker_symbol.upper(),
             "empresa": info.get("longName", ticker_symbol) if isinstance(info, dict) else ticker_symbol,
             "datos": datos_historicos,
             "datos_crudos": {
                 "ebit": ebit,
-                "nopat": nopat,
-                "patrimonio": total_equity,
-                "deuda_total": total_debt,
-                "ventas": total_revenue,
+                "patrimonio": equity,
+                "deuda_total": debt,
+                "ventas": revenue,
                 "utilidad_neta": net_income,
-                "activos_totales": total_assets
-            },
-            "ratios": {
-                "roic": roic,
-                "leverage": leverage if leverage is not None else "High/Neg",
-                "razon_corriente": current_ratio,
-                "roe": roe,
-                "roa": roa,
-                "ros": ros,
-                "beta": beta
+                "activos_totales": assets
             }
         })
 
