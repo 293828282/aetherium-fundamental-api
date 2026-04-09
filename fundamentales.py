@@ -9,13 +9,12 @@ import threading
 app = Flask(__name__)
 CORS(app)
 
-# EL CANDADO: Obliga al servidor a atender a los clientes de uno en uno
-# Esto evita el error 429 (Too Many Requests) si el frontend hace peticiones simultáneas.
+# Candado para evitar que Yahoo nos bloquee por exceso de peticiones
 api_lock = threading.Lock()
 
 @app.route('/')
 def home():
-    return "🚀 Aetherium Fundamental API v8.0 [ANTI-BLOCK & LOCK FIX] - ONLINE"
+    return "🚀 Aetherium Fundamental API v9.0 [FULL RATIOS + ANTI-BLOCK] - ONLINE"
 
 @app.route('/api/datos', methods=['GET'])
 def analizar_eeff():
@@ -26,19 +25,17 @@ def analizar_eeff():
         return jsonify({"error": "Falta el Ticker"}), 400
 
     try:
-        # Aquí empieza la fila de espera para proteger la conexión
         with api_lock:
-            # Pausa obligatoria para simular comportamiento humano
+            # Pausa de seguridad
             time.sleep(random.uniform(1.0, 2.5))
             
-            # Dejamos que yfinance use su propio sistema curl_cffi internamente
             empresa = yf.Ticker(ticker_symbol)
             
             yf_period = periodo
             if periodo not in ['1mo', '3mo', '6mo', '1y', '5y']: 
                 yf_period = '5y'
 
-            # 1. EXTRACCIÓN DE HISTORIAL BLINDADA (Con 3 reintentos)
+            # 1. EXTRACCIÓN DE HISTORIAL (Para los gráficos y Markowitz)
             hist = None
             for intento in range(3):
                 try:
@@ -46,7 +43,6 @@ def analizar_eeff():
                     if not hist.empty:
                         break
                 except Exception as e:
-                    print(f"Fallo historia {ticker_symbol} intento {intento}: {e}")
                     time.sleep(2)
             
             datos_historicos = []
@@ -57,16 +53,14 @@ def analizar_eeff():
                         "Cierre": float(row['Close'])
                     })
 
-            # 2. EXTRACCIÓN DE INFO BLINDADA (Evita el JSONDecodeError / Expecting value)
+            # 2. EXTRACCIÓN DE FUNDAMENTALES Y RATIOS
             info = {}
             try:
                 info = empresa.info
             except Exception as e:
-                print(f"Yahoo bloqueó la extracción de info para {ticker_symbol}: {e}")
-                # Si falla, info se queda como un diccionario vacío en lugar de romper el servidor
+                print(f"Yahoo bloqueó info para {ticker_symbol}: {e}")
 
-            # Si info viene vacío porque Yahoo bloqueó, asignamos 0 a todo.
-            # El Frontend de Aetherium detectará los 0s o el arreglo vacío y activará el Fallback Matemático solo.
+            # Variables Base Seguras
             ebit = info.get('operatingCashflow', 0) if isinstance(info, dict) else 0
             deuda = info.get('totalDebt', 0) if isinstance(info, dict) else 0
             
@@ -80,20 +74,56 @@ def analizar_eeff():
                     except ValueError:
                         patrimonio = float(info.get('totalStockholderEquity', 0))
 
-        # RESPUESTA LIMPIA SIEMPRE
+            # Cálculos Estructurales (NOPAT, ROIC, Leverage)
+            tax_rate = 0.27
+            nopat = ebit * (1 - tax_rate)
+            capital_invertido = patrimonio + deuda
+            roic = (nopat / capital_invertido) * 100 if capital_invertido > 0 else 0
+            leverage = (deuda / patrimonio) if patrimonio > 0 else 0
+
+            # Extracción del Diccionario Extendido
+            if isinstance(info, dict):
+                ratios_ext = {
+                    "liquidez_corriente": info.get('currentRatio'),
+                    "prueba_acida": info.get('quickRatio'),
+                    "roe": round(info.get('returnOnEquity', 0) * 100, 2) if info.get('returnOnEquity') else None,
+                    "roa": round(info.get('returnOnAssets', 0) * 100, 2) if info.get('returnOnAssets') else None,
+                    "ros": round(info.get('profitMargins', 0) * 100, 2) if info.get('profitMargins') else None,
+                    "beta": round(info.get('beta', 0), 2) if info.get('beta') else None,
+                    "ebitda": info.get('ebitda'),
+                    "ventas": info.get('totalRevenue'),
+                    "utilidad_neta": info.get('netIncome')
+                }
+            else:
+                ratios_ext = {k: None for k in ["liquidez_corriente", "prueba_acida", "roe", "roa", "ros", "beta", "ebitda", "ventas", "utilidad_neta"]}
+
+        # 3. RESPUESTA JSON COMPLETA
         return jsonify({
             "ticker": ticker_symbol.upper(),
             "empresa": info.get("longName", ticker_symbol) if isinstance(info, dict) else ticker_symbol,
             "datos": datos_historicos,
-            "fundamentales": {
+            "datos_crudos": {
                 "ebit": round(ebit if ebit else 0, 2),
+                "nopat": round(nopat, 2),
                 "patrimonio": round(patrimonio if patrimonio else 0, 2),
-                "deuda_total": round(deuda if deuda else 0, 2)
+                "deuda_total": round(deuda if deuda else 0, 2),
+                "ventas": ratios_ext["ventas"],
+                "utilidad_neta": ratios_ext["utilidad_neta"]
+            },
+            "ratios": {
+                "roic": round(roic, 2),
+                "leverage": round(leverage, 2) if leverage else "High/Neg",
+                "razon_corriente": ratios_ext["liquidez_corriente"],
+                "prueba_acida": ratios_ext["prueba_acida"],
+                "roe": ratios_ext["roe"],
+                "roa": ratios_ext["roa"],
+                "ros": ratios_ext["ros"],
+                "beta": ratios_ext["beta"],
+                "ebitda": ratios_ext["ebitda"]
             }
         })
 
     except Exception as e:
-        # Solo llegará aquí si hay un error real de sintaxis en Python
         return jsonify({"error": "Fallo critico en la API", "detalle": str(e)}), 500
 
 if __name__ == '__main__':
