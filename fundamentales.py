@@ -15,113 +15,101 @@ USER_AGENTS = [
 
 @app.route('/')
 def home():
-    return "🚀 Aetherium Fundamental API v4.0 [OFFICIAL FIX] - ONLINE"
+    return "🚀 Aetherium Fundamental API v4.1 [OFFICIAL FIX] - ONLINE"
 
-@app.route('/api/fundamentales', methods=['GET'])
+# --- RUTA CORREGIDA: Ahora es /api/datos para conectar con el Frontend ---
+@app.route('/api/datos', methods=['GET'])
 def analizar_eeff():
     ticker_symbol = request.args.get('ticker')
+    # Manejo de la variable 'periodo' para compatibilidad con el frontend, aunque yfinance usa periodos propios
+    periodo = request.args.get('periodo', '1y') 
+    
     if not ticker_symbol:
         return jsonify({"error": "Falta el Ticker"}), 400
 
     try:
-        # 1. Sigilo total (Sin sesión manual para evitar el error de curl_cffi)
-        time.sleep(random.uniform(1.5, 3))
+        # 1. Sigilo total para evitar bloqueos
+        time.sleep(random.uniform(1.0, 2.5))
         empresa = yf.Ticker(ticker_symbol)
         
-        # 2. Descarga de datos
-        is_statement = empresa.get_financials()
-        bs_statement = empresa.get_balance_sheet()
-        info = empresa.info
+        # 2. Descarga de datos históricos de precios (Crucial para el Dashboard)
+        # Mapeamos el periodo del frontend al formato de yfinance
+        yf_period = periodo
+        if periodo == '1mo': yf_period = '1mo'
+        elif periodo == '3mo': yf_period = '3mo'
+        elif periodo == '6mo': yf_period = '6mo'
+        elif periodo == '1y': yf_period = '1y'
+        elif periodo == '3y': yf_period = '5y' # Descargamos más por seguridad
+        elif periodo == '5y': yf_period = '5y'
+        else: yf_period = '5y' # Por defecto forzamos 5y para el LOCF del frontend
 
-        # --- AUDITOR OMNICANAL (Tu lógica original) ---
+        hist = empresa.history(period=yf_period)
+        
+        datos_historicos = []
+        if not hist.empty:
+            for index, row in hist.iterrows():
+                datos_historicos.append({
+                    "Fecha": index.strftime('%Y-%m-%d'),
+                    "Cierre": float(row['Close'])
+                })
+
+        # 3. Descarga de Fundamentales (Mantenemos tu lógica original por si la usas en otro lado)
+        info = empresa.info
+        try:
+            is_statement = empresa.get_financials()
+            bs_statement = empresa.get_balance_sheet()
+        except:
+            is_statement = None
+            bs_statement = None
+
+        # Función de búsqueda de datos
         def buscar_dato(df, keywords):
             if df is None or df.empty: return None
             for word in keywords:
-                match = [idx for idx in df.index if word.lower() in idx.lower()]
+                match = [idx for idx in df.index if word.lower() in str(idx).lower()]
                 if match:
                     val = df.loc[match[0]].iloc[0]
                     if val is not None and str(val).lower() != 'nan' and val != 0:
                         return float(val)
             return None
 
-        # --- EXTRACCIÓN EBIT ---
+        # Extracción EBIT
         ebit = buscar_dato(is_statement, ['EBIT', 'Operating Income', 'OperatingIncome'])
         if ebit is None: ebit = float(info.get('operatingCashflow', 0))
 
-        # --- EXTRACCIÓN PATRIMONIO ---
+        # Extracción Patrimonio con blindaje
         patrimonio = buscar_dato(bs_statement, ['Total Stockholder Equity', 'Stockholders Equity', 'Common Stock Equity', 'Total Equity', 'Net Assets'])
         if patrimonio is None or patrimonio == 0:
             book_v = info.get('bookValue')
             shares = info.get('sharesOutstanding')
-            if book_v and shares:
-                patrimonio = float(book_v * shares)
+            if book_v is not None and shares is not None:
+                try:
+                    patrimonio = float(book_v) * float(shares)
+                except ValueError:
+                    patrimonio = 0.0
         if patrimonio is None or patrimonio == 0:
             patrimonio = float(info.get('totalStockholderEquity', 0))
 
-        # --- EXTRACCIÓN DEUDA ---
+        # Extracción Deuda
         deuda = buscar_dato(bs_statement, ['Total Debt', 'Long Term Debt', 'Total Liab'])
         if deuda is None or deuda == 0:
             deuda = float(info.get('totalDebt', 0))
 
-        # --- CÁLCULOS FINANCIEROS BASE ---
-        patrimonio_final = patrimonio if patrimonio is not None else 0.0
-        ebit_final = ebit if ebit is not None else 0.0
-        deuda_final = deuda if deuda is not None else 0.0
-        
-        tax_rate = 0.27
-        nopat = ebit_final * (1 - tax_rate)
-        capital_invertido = patrimonio_final + deuda_final
-        roic = (nopat / capital_invertido) * 100 if capital_invertido > 0 else 0
-        
-        # --- MAPEO DE NUEVAS VARIABLES (Lo que pidió el colega) ---
-        # Extraemos directamente de info para asegurar compatibilidad
-        ratios_extendidos = {
-            "liquidez": {
-                "corriente": info.get('currentRatio'),
-                "acida": info.get('quickRatio')
-            },
-            "rentabilidad_extra": {
-                "roe": round(info.get('returnOnEquity', 0) * 100, 2) if info.get('returnOnEquity') else None,
-                "roa": round(info.get('returnOnAssets', 0) * 100, 2) if info.get('returnOnAssets') else None,
-                "ros": round(info.get('profitMargins', 0) * 100, 2) if info.get('profitMargins') else None
-            },
-            "mercado": {
-                "beta": round(info.get('beta', 0), 2) if info.get('beta') else None,
-                "ebitda": info.get('ebitda'),
-                "ventas": info.get('totalRevenue'),
-                "utilidad_neta": info.get('netIncome')
-            }
-        }
-
-        # --- RESPUESTA FINAL ---
+        # --- RESPUESTA ESTRUCTURADA ---
+        # El frontend Aetherium busca la llave "datos" que contiene el arreglo de precios
         return jsonify({
             "ticker": ticker_symbol.upper(),
             "empresa": info.get("longName", ticker_symbol),
-            "sector": info.get("sector", "N/A"),
-            "datos_crudos": {
-                "ebit": round(ebit_final, 2),
-                "nopat": round(nopat, 2),
-                "patrimonio": round(patrimonio_final, 2),
-                "deuda_total": round(deuda_final, 2),
-                "ventas": ratios_extendidos["mercado"]["ventas"],
-                "utilidad_neta": ratios_extendidos["mercado"]["utilidad_neta"]
-            },
-            "ratios": {
-                "roic": round(roic, 2),
-                "leverage": round(deuda_final / patrimonio_final, 2) if patrimonio_final > 0 else "High/Neg",
-                "razon_corriente": ratios_extendidos["liquidez"]["corriente"],
-                "prueba_acida": ratios_extendidos["liquidez"]["acida"],
-                "roe": ratios_extendidos["rentabilidad_extra"]["roe"],
-                "roa": ratios_extendidos["rentabilidad_extra"]["roa"],
-                "ros": ratios_extendidos["rentabilidad_extra"]["ros"],
-                "beta": ratios_extendidos["mercado"]["beta"],
-                "ebitda": ratios_extendidos["mercado"]["ebitda"]
-            },
-            "msg": "Data v4.0 - Basada en motor v3.3 funcional"
+            "datos": datos_historicos,  # <--- ESTO ES LO QUE LEE EL DASHBOARD HTML/REACT
+            "fundamentales": {
+                "ebit": round(ebit if ebit else 0, 2),
+                "patrimonio": round(patrimonio if patrimonio else 0, 2),
+                "deuda_total": round(deuda if deuda else 0, 2)
+            }
         })
 
     except Exception as e:
-        return jsonify({"error": "Fallo crítico", "detalle": str(e)}), 500
+        return jsonify({"error": "Fallo critico en la API", "detalle": str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
