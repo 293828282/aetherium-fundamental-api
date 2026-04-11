@@ -10,66 +10,58 @@ import yfinance as yf
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# Candado para proteger las peticiones de yfinance
 api_lock = threading.Lock()
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 }
 
-# 1. MOTOR DE PRECIOS Y RETORNOS (Tu método infalible)
+# 1. MOTOR DE PRECIOS Y RETORNOS
 def extraccion_silenciosa_precios(ticker, periodo="1y"):
     url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?range={periodo}&interval=1d"
     try:
         respuesta = requests.get(url, headers=HEADERS, timeout=10)
         if respuesta.status_code != 200: return None
-        
         data = respuesta.json()
         resultado = data['chart']['result'][0]
         precios = [p for p in resultado['indicators']['quote'][0]['close'] if p is not None]
-        
         if len(precios) < 2: return None
         retorno = (precios[-1] / precios[0]) - 1
         return {"precio_actual": round(precios[-1], 2), "retorno": round(retorno, 4)}
     except:
         return None
 
-# 2. MOTOR CONTABLE BLINDADO
+# 2. MOTOR CONTABLE (Alineado con el texto real de Yahoo)
 def extraer_fundamentales_yfinance(ticker_symbol):
     try:
         empresa = yf.Ticker(ticker_symbol)
         
-        # Diccionario de respaldo
+        # Respaldo rápido
         info = {}
         try: info = empresa.info
         except: pass
 
-        is_stmt = pd.DataFrame()
-        bs_stmt = pd.DataFrame()
-        try:
-            is_stmt = empresa.get_financials()
-            bs_stmt = empresa.get_balance_sheet()
-        except:
-            pass
+        # Usamos las propiedades modernas de yfinance
+        is_stmt = empresa.financials
+        bs_stmt = empresa.balance_sheet
 
-        # EL FIX MAESTRO: Escaneo de columnas profundas (ignora los vacíos del TTM)
         def find_val(df, keywords):
             if df is None or df.empty: return 0
             for word in keywords:
+                # Buscamos coincidencias en los nombres de las filas
                 matches = [idx for idx in df.index if word.lower() in str(idx).lower()]
-                if matches:
-                    for match in matches:
-                        fila = df.loc[match]
-                        # Si hay filas duplicadas con el mismo nombre, tomamos la primera
-                        if isinstance(fila, pd.DataFrame): fila = fila.iloc[0]
-                        
-                        # Escaneamos todas las columnas de izquierda a derecha
-                        for val in fila.values:
-                            if pd.notna(val) and str(val).lower() != 'nan' and val != 0:
-                                return float(val)
+                for match in matches:
+                    fila = df.loc[match]
+                    if isinstance(fila, pd.DataFrame): fila = fila.iloc[0]
+                    
+                    # Recorremos la fila (los años) y tomamos el primer número que no sea NaN ni 0
+                    for val in fila.values:
+                        if pd.notna(val) and str(val).lower() != 'nan' and val != 0:
+                            return float(val)
             return 0
 
-        # --- EXTRACCIÓN EXACTA DE TUS VARIABLES ---
+        # --- EXTRACCIÓN EXACTA BASADA EN TU CAPTURA DE PANTALLA ---
+        # Balance
         efectivo = find_val(bs_stmt, ['cash', 'cash equivalents']) or float(info.get('totalCash', 0))
         inventarios = find_val(bs_stmt, ['inventory'])
         activo_circulante = find_val(bs_stmt, ['total current assets', 'current assets'])
@@ -82,10 +74,15 @@ def extraer_fundamentales_yfinance(ticker_symbol):
         if patrimonio == 0: 
             patrimonio = float(info.get('totalStockholderEquity', info.get('bookValue', 0) * info.get('sharesOutstanding', 0)))
 
+        # Estado de Resultados (Income Statement)
         ebit = find_val(is_stmt, ['ebit', 'operating income']) or float(info.get('operatingCashflow', 0))
-        gastos_int = abs(find_val(is_stmt, ['interest expense']))
+        
+        # Fix para los intereses (Apple los mezcla con los no operativos)
+        gastos_int = find_val(is_stmt, ['interest expense', 'interest income expense'])
+        gastos_int = abs(gastos_int) # Lo convertimos a positivo
+        
         impuestos = find_val(is_stmt, ['tax provision', 'income tax'])
-        utilidad_neta = find_val(is_stmt, ['net income', 'net income common']) or float(info.get('netIncome', 0))
+        utilidad_neta = find_val(is_stmt, ['net income', 'net income common stockholders']) or float(info.get('netIncome', 0))
 
         return {
             "estado_situacion": {
@@ -111,7 +108,7 @@ def extraer_fundamentales_yfinance(ticker_symbol):
 
 @app.route('/')
 def home():
-    return jsonify({"status": "Motor Híbrido Activo", "metodo": "Escaneo Profundo de Columnas"})
+    return jsonify({"status": "Motor Híbrido Activo", "metodo": "Fijación de Nombres Contables"})
 
 @app.route('/api/datos', methods=['GET', 'POST'])
 def obtener_datos():
