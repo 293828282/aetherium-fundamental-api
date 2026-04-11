@@ -17,7 +17,7 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 }
 
-# 1. MOTOR DE PRECIOS Y RETORNOS (Tu método infalible con Requests)
+# 1. MOTOR DE PRECIOS Y RETORNOS (Tu método infalible)
 def extraccion_silenciosa_precios(ticker, periodo="1y"):
     url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?range={periodo}&interval=1d"
     try:
@@ -34,10 +34,16 @@ def extraccion_silenciosa_precios(ticker, periodo="1y"):
     except:
         return None
 
-# 2. MOTOR CONTABLE (El método de la V11 que ya te funcionó)
+# 2. MOTOR CONTABLE BLINDADO
 def extraer_fundamentales_yfinance(ticker_symbol):
     try:
         empresa = yf.Ticker(ticker_symbol)
+        
+        # Diccionario de respaldo
+        info = {}
+        try: info = empresa.info
+        except: pass
+
         is_stmt = pd.DataFrame()
         bs_stmt = pd.DataFrame()
         try:
@@ -46,34 +52,57 @@ def extraer_fundamentales_yfinance(ticker_symbol):
         except:
             pass
 
+        # EL FIX MAESTRO: Escaneo de columnas profundas (ignora los vacíos del TTM)
         def find_val(df, keywords):
             if df is None or df.empty: return 0
             for word in keywords:
                 matches = [idx for idx in df.index if word.lower() in str(idx).lower()]
                 if matches:
                     for match in matches:
-                        val = df.loc[match].iloc[0]
-                        if pd.notna(val) and str(val).lower() != 'nan' and val != 0:
-                            return float(val)
+                        fila = df.loc[match]
+                        # Si hay filas duplicadas con el mismo nombre, tomamos la primera
+                        if isinstance(fila, pd.DataFrame): fila = fila.iloc[0]
+                        
+                        # Escaneamos todas las columnas de izquierda a derecha
+                        for val in fila.values:
+                            if pd.notna(val) and str(val).lower() != 'nan' and val != 0:
+                                return float(val)
             return 0
 
-        # Mapeo exacto a las cuentas que solicitaste
+        # --- EXTRACCIÓN EXACTA DE TUS VARIABLES ---
+        efectivo = find_val(bs_stmt, ['cash', 'cash equivalents']) or float(info.get('totalCash', 0))
+        inventarios = find_val(bs_stmt, ['inventory'])
+        activo_circulante = find_val(bs_stmt, ['total current assets', 'current assets'])
+        pasivo_circulante = find_val(bs_stmt, ['total current liabilities', 'current liabilities'])
+        pasivos_totales = find_val(bs_stmt, ['total liabilities', 'total liab']) or float(info.get('totalLiabilitiesNetMinorityInterest', 0))
+        deuda_cp = find_val(bs_stmt, ['current debt', 'short term debt'])
+        deuda_lp = find_val(bs_stmt, ['long term debt'])
+        
+        patrimonio = find_val(bs_stmt, ['stockholders equity', 'total equity', 'common stock equity'])
+        if patrimonio == 0: 
+            patrimonio = float(info.get('totalStockholderEquity', info.get('bookValue', 0) * info.get('sharesOutstanding', 0)))
+
+        ebit = find_val(is_stmt, ['ebit', 'operating income']) or float(info.get('operatingCashflow', 0))
+        gastos_int = abs(find_val(is_stmt, ['interest expense']))
+        impuestos = find_val(is_stmt, ['tax provision', 'income tax'])
+        utilidad_neta = find_val(is_stmt, ['net income', 'net income common']) or float(info.get('netIncome', 0))
+
         return {
             "estado_situacion": {
-                "efectivo_y_equivalentes": find_val(bs_stmt, ['cash', 'cash equivalents']),
-                "inventarios": find_val(bs_stmt, ['inventory']),
-                "activo_circulante": find_val(bs_stmt, ['total current assets', 'current assets']),
-                "pasivo_circulante": find_val(bs_stmt, ['total current liabilities', 'current liabilities']),
-                "pasivos_totales": find_val(bs_stmt, ['total liabilities', 'total liab']),
-                "deuda_financiera_cp": find_val(bs_stmt, ['current debt', 'short term debt']),
-                "deuda_financiera_lp": find_val(bs_stmt, ['long term debt']),
-                "patrimonio_neto": find_val(bs_stmt, ['stockholders equity', 'total equity', 'common stock equity'])
+                "efectivo_y_equivalentes": efectivo,
+                "inventarios": inventarios,
+                "activo_circulante": activo_circulante,
+                "pasivo_circulante": pasivo_circulante,
+                "pasivos_totales": pasivos_totales,
+                "deuda_financiera_cp": deuda_cp,
+                "deuda_financiera_lp": deuda_lp,
+                "patrimonio_neto": patrimonio
             },
             "estado_resultados": {
-                "utilidad_operativa_ebit": find_val(is_stmt, ['ebit', 'operating income']),
-                "gastos_por_intereses": abs(find_val(is_stmt, ['interest expense'])),
-                "gasto_impuesto_renta": find_val(is_stmt, ['tax provision', 'income tax']),
-                "utilidad_neta": find_val(is_stmt, ['net income', 'net income common'])
+                "utilidad_operativa_ebit": ebit,
+                "gastos_por_intereses": gastos_int,
+                "gasto_impuesto_renta": impuestos,
+                "utilidad_neta": utilidad_neta
             }
         }
     except Exception as e:
@@ -82,7 +111,7 @@ def extraer_fundamentales_yfinance(ticker_symbol):
 
 @app.route('/')
 def home():
-    return jsonify({"status": "Motor Híbrido Activo", "metodo": "Precios(Requests) + EEFF(yFinance)"})
+    return jsonify({"status": "Motor Híbrido Activo", "metodo": "Escaneo Profundo de Columnas"})
 
 @app.route('/api/datos', methods=['GET', 'POST'])
 def obtener_datos():
@@ -112,10 +141,8 @@ def obtener_datos():
     if not fundamentales or not datos_activo:
         return jsonify({"error": f"Fallo al extraer la data profunda de {ticker}."}), 404
 
-    # Tratamiento de tasas (El tesoro ^TNX viene como 4.5, lo pasamos a 0.045)
     rf_rate = (datos_rf['precio_actual'] / 100) if datos_rf else 0.04
     
-    # Cálculo del Costo de la Deuda
     deuda_total = fundamentales["estado_situacion"]["deuda_financiera_cp"] + fundamentales["estado_situacion"]["deuda_financiera_lp"]
     kd = (fundamentales["estado_resultados"]["gastos_por_intereses"] / deuda_total) if deuda_total > 0 else 0
 
